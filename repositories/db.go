@@ -8,6 +8,7 @@ import (
 
 	"github.com/wangle201210/chat-history/models"
 	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -29,9 +30,15 @@ func InitDB(dsn string) error {
 	var dbType string
 	var maxOpenConns, maxIdleConns int
 
-	if strings.Contains(dsn, "@tcp(") {
+	if isPostgresDSN(dsn) {
+		dbType = "postgres"
+		dialector = postgres.Open(dsn)
+		maxOpenConns = 100
+		maxIdleConns = 10
+	} else if strings.Contains(dsn, "@tcp(") {
 		// MySQL DSN 格式
 		dbType = "mysql"
+		dsn = ensureMySQLCharset(dsn)
 		dialector = mysql.Open(dsn)
 		maxOpenConns = 100
 		maxIdleConns = 10
@@ -65,6 +72,40 @@ func InitDB(dsn string) error {
 	}
 
 	return nil
+}
+
+func isPostgresDSN(dsn string) bool {
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		return true
+	}
+	return strings.Contains(dsn, "host=") && strings.Contains(dsn, "dbname=")
+}
+
+func ensureMySQLCharset(dsn string) string {
+	questionIndex := strings.Index(dsn, "?")
+	if questionIndex == -1 {
+		return dsn + "?charset=utf8mb4"
+	}
+
+	base := dsn[:questionIndex]
+	params := dsn[questionIndex+1:]
+	if len(params) == 0 {
+		return base + "?charset=utf8mb4"
+	}
+
+	parts := strings.Split(params, "&")
+	hasCharset := false
+	for i, part := range parts {
+		if strings.HasPrefix(part, "charset=") {
+			parts[i] = "charset=utf8mb4"
+			hasCharset = true
+			break
+		}
+	}
+	if !hasCharset {
+		parts = append(parts, "charset=utf8mb4")
+	}
+	return base + "?" + strings.Join(parts, "&")
 }
 
 // GetDB 获取数据库实例
