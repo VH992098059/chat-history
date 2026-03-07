@@ -38,7 +38,7 @@ func InitDB(dsn string) error {
 	} else if strings.Contains(dsn, "@tcp(") {
 		// MySQL DSN 格式
 		dbType = "mysql"
-		dsn = ensureMySQLCharset(dsn)
+		dsn = ensureMySQLConfig(dsn)
 		dialector = mysql.Open(dsn)
 		maxOpenConns = 100
 		maxIdleConns = 10
@@ -67,7 +67,7 @@ func InitDB(dsn string) error {
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
 	// 自动迁移数据库表结构
-	if err = autoMigrateTables(); err != nil {
+	if err = autoMigrateTables(dbType); err != nil {
 		return fmt.Errorf("failed to migrate database tables: %v", err)
 	}
 
@@ -81,30 +81,52 @@ func isPostgresDSN(dsn string) bool {
 	return strings.Contains(dsn, "host=") && strings.Contains(dsn, "dbname=")
 }
 
-func ensureMySQLCharset(dsn string) string {
-	questionIndex := strings.Index(dsn, "?")
-	if questionIndex == -1 {
-		return dsn + "?charset=utf8mb4"
+func ensureMySQLConfig(dsn string) string {
+	if !strings.Contains(dsn, "?") {
+		return dsn + "?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=True&loc=Local"
 	}
 
+	questionIndex := strings.Index(dsn, "?")
 	base := dsn[:questionIndex]
 	params := dsn[questionIndex+1:]
+
 	if len(params) == 0 {
-		return base + "?charset=utf8mb4"
+		return base + "?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=True&loc=Local"
 	}
 
 	parts := strings.Split(params, "&")
 	hasCharset := false
+	hasCollation := false
+	hasParseTime := false
+	hasLoc := false
+
 	for i, part := range parts {
 		if strings.HasPrefix(part, "charset=") {
 			parts[i] = "charset=utf8mb4"
 			hasCharset = true
-			break
+		} else if strings.HasPrefix(part, "collation=") {
+			parts[i] = "collation=utf8mb4_unicode_ci"
+			hasCollation = true
+		} else if strings.HasPrefix(part, "parseTime=") {
+			hasParseTime = true
+		} else if strings.HasPrefix(part, "loc=") {
+			hasLoc = true
 		}
 	}
+
 	if !hasCharset {
 		parts = append(parts, "charset=utf8mb4")
 	}
+	if !hasCollation {
+		parts = append(parts, "collation=utf8mb4_unicode_ci")
+	}
+	if !hasParseTime {
+		parts = append(parts, "parseTime=True")
+	}
+	if !hasLoc {
+		parts = append(parts, "loc=Local")
+	}
+
 	return base + "?" + strings.Join(parts, "&")
 }
 
@@ -117,9 +139,14 @@ func GetDB() *gorm.DB {
 }
 
 // autoMigrateTables 自动迁移数据库表结构
-func autoMigrateTables() error {
+func autoMigrateTables(dbType string) error {
+	migrator := db
+	if dbType == "mysql" {
+		migrator = db.Set("gorm:table_options", "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+	}
+
 	// 自动迁移会创建表、缺失的外键、约束、列和索引
-	return db.AutoMigrate(
+	return migrator.AutoMigrate(
 		&models.Conversation{},
 		&models.Message{},
 		&models.Attachment{},
