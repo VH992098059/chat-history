@@ -39,6 +39,12 @@ func InitDB(dsn string) error {
 		// MySQL DSN 格式
 		dbType = "mysql"
 		dsn = ensureMySQLConfig(dsn)
+
+		// 尝试创建 MySQL 数据库
+		if err := createMySQLDatabase(dsn); err != nil {
+			return fmt.Errorf("failed to create database: %v", err)
+		}
+
 		dialector = mysql.Open(dsn)
 		maxOpenConns = 100
 		maxIdleConns = 10
@@ -128,6 +134,49 @@ func ensureMySQLConfig(dsn string) string {
 	}
 
 	return base + "?" + strings.Join(parts, "&")
+}
+
+func createMySQLDatabase(dsn string) error {
+	// 解析 DSN 获取数据库名
+	// user:pass@tcp(host:port)/dbname?charset=utf8mb4...
+	parts := strings.Split(dsn, "/")
+	if len(parts) < 2 {
+		return nil // 无法解析出数据库名，不做处理
+	}
+
+	// 截取掉数据库名后面的参数部分
+	dbNameWithParams := parts[1]
+
+	// 如果包含 ?，说明有参数
+	if strings.Contains(dbNameWithParams, "?") {
+		// 截取参数
+		paramIndex := strings.Index(dbNameWithParams, "?")
+		dbNameWithParams = dbNameWithParams[:paramIndex]
+	}
+
+	if dbNameWithParams == "" {
+		return nil
+	}
+
+	// 连接到 MySQL 服务器（不指定数据库）
+	// user:pass@tcp(host:port)/
+	baseDSN := parts[0] + "/"
+	db, err := gorm.Open(mysql.Open(baseDSN), &gorm.Config{})
+	if err != nil {
+		return nil // 连接失败可能是没权限等原因，忽略错误，让后面的流程处理
+	}
+
+	// 创建数据库
+	createSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s` DEFAULT CHARACTER SET utf8mb4 DEFAULT COLLATE utf8mb4_unicode_ci;", dbNameWithParams)
+	// 忽略错误，因为可能是权限不足，如果数据库不存在后续连接会报错
+	_ = db.Exec(createSQL)
+
+	sqlDB, err := db.DB()
+	if err == nil {
+		_ = sqlDB.Close()
+	}
+
+	return nil
 }
 
 // GetDB 获取数据库实例
